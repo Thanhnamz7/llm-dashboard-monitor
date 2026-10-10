@@ -1,0 +1,26 @@
+{
+  "name": "@llmops/api",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@llmops/telemetry": "*",
+    "@llmops/metrics": "*",
+    "@llmops/db": "*",
+    "@llmops/opencode-collector": "*",
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17",
+    "@types/node": "^20.11.24",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3"
+  }
+}
