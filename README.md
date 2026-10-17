@@ -13,7 +13,7 @@
 *"Biết LLM đang tốn bao nhiêu, chậm ở đâu và lỗi vì sao."*
 
 Học phần: **Các Vấn Đề Hiện Đại Của Công Nghệ Phần Mềm (DHIT20)**  
-Đơn vị thực hiện: **Nhóm 69** • Phiên bản: **v2.0 (Chuẩn NCKH)**
+Đơn vị thực hiện: **Nhóm 69** • Phiên bản: **v2.0**
 
 </div>
 
@@ -165,7 +165,7 @@ npm run seed
 
 ## 7. Chạy Kiểm thử (Testing)
 
-Dự án áp dụng Test Plan chuẩn theo hồ sơ NCKH (TC01 - TC19). Để chạy toàn bộ bộ kiểm thử tự động:
+Dự án áp dụng Test Plan chuẩn (TC01 - TC19). Để chạy toàn bộ bộ kiểm thử tự động:
 
 ```bash
 npm test
@@ -222,21 +222,7 @@ await fetch("http://localhost:4000/api/telemetry", {
 
 ---
 
-## 9. Kịch bản Thuyết minh Bảo vệ (Demo Day - 16 Phút)
-
-Tuân thủ nghiêm ngặt theo **Mục 10 của Hồ sơ dự án**:
-1. **Phút 01:** Giới thiệu bài toán phân tích chi phí và độ trễ LLM.
-2. **Phút 02-03:** Trình chiếu kiến trúc hệ thống và luồng dữ liệu 5 bước.
-3. **Phút 04-06:** Demo OpenCode chạy lệnh thực tế $\rightarrow$ Collector tự động ghi nhận vào CSDL.
-4. **Phút 07-09:** Demo Dashboard hiển thị đầy đủ 6 chỉ số KPI và các biểu đồ xu hướng.
-5. **Phút 10-11:** Thao tác bộ lọc thời gian/model và mở màn hình Request Detail.
-6. **Phút 12-13:** Báo cáo kết quả kiểm thử (15/15 Passed).
-7. **Phút 14-15:** Demo xử lý lỗi: Bấm nút **"Giả lập Request"** $\rightarrow$ chọn **"Bơm lỗi Timeout / Rate Limit"** $\rightarrow$ quan sát tỷ lệ lỗi (Error Rate) và biểu đồ cập nhật trực tiếp.
-8. **Phút 16:** Trả lời câu hỏi phản biện của hội đồng giảng viên.
-
----
-
-## 10. Giấy phép & Quy tắc Quản lý Nhánh (Git Flow)
+## 9. Giấy phép & Quy tắc Quản lý Nhánh (Git Flow)
 
 * Nhánh `main`: Nhánh sản phẩm ổn định, được bảo vệ nghiêm ngặt (Protected branch).
 * Nhánh `develop`: Nhánh tích hợp tính năng chung.
