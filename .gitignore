@@ -1,4 +1,6 @@
 data/
+*.docx
+BAO_CAO*.md
 node_modules/
 .next/
 dist/
