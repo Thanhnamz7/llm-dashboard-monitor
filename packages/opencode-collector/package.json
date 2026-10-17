@@ -1,0 +1,10 @@
+{
+  "name": "@llmops/opencode-collector",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@llmops/telemetry": "*",
+    "zod": "^3.22.4"
+  }
+}

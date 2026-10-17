@@ -1,0 +1,11 @@
+{
+  "name": "@llmops/db",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "drizzle-orm": "^0.29.3",
+    "pg": "^8.11.3",
+    "@types/pg": "^8.11.0"
+  }
+}
