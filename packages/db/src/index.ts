@@ -33,8 +33,25 @@ export interface ModelPricingItem {
   effectiveTo?: string | null;
 }
 
-const LOCAL_DATA_DIR = path.resolve(process.cwd(), 'data');
-const LOCAL_STORE_FILE = path.join(LOCAL_DATA_DIR, 'llmops_store.json');
+function getLocalStorePath(): { dir: string; file: string } {
+  const rootAppStore = path.resolve(process.cwd(), 'apps', 'api', 'data', 'llmops_store.json');
+  if (fs.existsSync(rootAppStore)) {
+    return { dir: path.dirname(rootAppStore), file: rootAppStore };
+  }
+  const cwdStore = path.resolve(process.cwd(), 'data', 'llmops_store.json');
+  if (fs.existsSync(cwdStore)) {
+    return { dir: path.dirname(cwdStore), file: cwdStore };
+  }
+  if (fs.existsSync(path.resolve(process.cwd(), 'apps', 'api'))) {
+    const dir = path.resolve(process.cwd(), 'apps', 'api', 'data');
+    return { dir, file: path.join(dir, 'llmops_store.json') };
+  }
+  const dir = path.resolve(process.cwd(), 'data');
+  return { dir, file: path.join(dir, 'llmops_store.json') };
+}
+
+const { dir: LOCAL_DATA_DIR, file: LOCAL_STORE_FILE } = getLocalStorePath();
+
 
 interface LocalStore {
   requests: TelemetryRequest[];
@@ -161,7 +178,14 @@ export class DBRepository {
           `INSERT INTO llm_requests 
            (request_id, timestamp, provider, model, input_tokens, output_tokens, total_tokens, latency_ms, status, error_type, estimated_cost)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-           ON CONFLICT (request_id) DO NOTHING
+           ON CONFLICT (request_id) DO UPDATE SET
+             input_tokens = EXCLUDED.input_tokens,
+             output_tokens = EXCLUDED.output_tokens,
+             total_tokens = EXCLUDED.total_tokens,
+             latency_ms = EXCLUDED.latency_ms,
+             status = EXCLUDED.status,
+             error_type = EXCLUDED.error_type,
+             estimated_cost = EXCLUDED.estimated_cost
            RETURNING *;`,
           [
             req.request_id,
@@ -185,8 +209,25 @@ export class DBRepository {
     }
 
     // Local embedded store fallback
-    const exists = this.localStore.requests.some((r) => r.request_id === req.request_id);
-    if (exists) {
+    const existingIndex = this.localStore.requests.findIndex((r) => r.request_id === req.request_id);
+    if (existingIndex >= 0) {
+      const existing = this.localStore.requests[existingIndex];
+      // Update record if incoming has tokens or if existing had 0 tokens/latency
+      if (req.total_tokens > 0 || req.latency_ms > 0 || existing.total_tokens === 0) {
+        this.localStore.requests[existingIndex] = {
+          ...existing,
+          ...req,
+          input_tokens: req.input_tokens > 0 ? req.input_tokens : existing.input_tokens,
+          output_tokens: req.output_tokens > 0 ? req.output_tokens : existing.output_tokens,
+          total_tokens: req.total_tokens > 0 ? req.total_tokens : existing.total_tokens,
+          latency_ms: req.latency_ms > 0 ? req.latency_ms : existing.latency_ms,
+          estimated_cost: req.estimated_cost > 0 ? req.estimated_cost : existing.estimated_cost,
+          status: req.status || existing.status,
+          error_type: req.error_type ?? existing.error_type,
+        };
+        this.saveLocalStore();
+        return { inserted: false, request: this.localStore.requests[existingIndex] };
+      }
       return { inserted: false, request: req };
     }
 

@@ -36,22 +36,28 @@ export interface OpenCodeRawEvent {
  * Maps events emitted from OpenCode / AI IDE into standard LLMOps Telemetry format
  */
 export function parseOpenCodeEvent(raw: OpenCodeRawEvent): TelemetryRequest {
-  const inputTokens =
+  const cacheRead = (raw.tokens as any)?.cache?.read || 0;
+  const reasoning = (raw.tokens as any)?.reasoning || 0;
+
+  const rawInput =
     raw.input_tokens ??
     raw.tokens?.input ??
     raw.prompt_tokens ??
     raw.tokens?.prompt ??
     0;
+  const inputTokens = rawInput + (raw.input_tokens !== undefined ? 0 : cacheRead);
 
-  const outputTokens =
+  const rawOutput =
     raw.output_tokens ??
     raw.tokens?.output ??
     raw.completion_tokens ??
     raw.tokens?.completion ??
     0;
+  const outputTokens = rawOutput + (raw.output_tokens !== undefined ? 0 : reasoning);
 
   const totalTokens =
     raw.tokens?.total ??
+    raw.total_tokens ??
     (inputTokens + outputTokens);
 
   let latencyMs = raw.latency_ms ?? raw.duration_ms ?? 0;
@@ -122,8 +128,8 @@ export function startOpenCodeWatcher(onNewRequest: (req: TelemetryRequest) => Pr
 
   console.log(`📡 OpenCode Live Collector connected to: ${opencodeDbPath}`);
 
-  let lastCheckedTime = Date.now() - 60 * 60 * 1000; // start by checking last 1 hour
-  const processedIds = new Set<string>();
+  let lastCheckedTime = Date.now() - 24 * 60 * 60 * 1000; // start by checking last 24 hours
+  const processedTokens = new Map<string, number>();
 
   const pollOpenCode = async () => {
     try {
@@ -133,34 +139,51 @@ export function startOpenCodeWatcher(onNewRequest: (req: TelemetryRequest) => Pr
       const db = new DatabaseSync(opencodeDbPath, { open: true, readOnly: true });
 
       const query = `
-        SELECT id, time_created, data 
+        SELECT id, time_created, time_updated, data 
         FROM message 
-        WHERE json_extract(data, '$.tokens') IS NOT NULL 
-          AND time_created >= ?
+        WHERE (time_created >= ? OR time_updated >= ?)
+          AND json_extract(data, '$.role') = 'assistant'
         ORDER BY time_created ASC
       `;
       const stmt = db.prepare(query);
-      const rows = stmt.all(lastCheckedTime) as Array<{ id: string; time_created: number; data: string }>;
+      const rows = stmt.all(lastCheckedTime, lastCheckedTime) as Array<{
+        id: string;
+        time_created: number;
+        time_updated: number;
+        data: string;
+      }>;
 
       for (const row of rows) {
-        if (!processedIds.has(row.id)) {
-          processedIds.add(row.id);
-          try {
-            const parsedData = JSON.parse(row.data);
-            const eventPayload: OpenCodeRawEvent = {
-              id: row.id,
-              time_created: row.time_created,
-              ...parsedData,
-            };
-            const normalized = parseOpenCodeEvent(eventPayload);
+        try {
+          const parsedData = JSON.parse(row.data);
+          const eventPayload: OpenCodeRawEvent = {
+            id: row.id,
+            time_created: row.time_created,
+            time_updated: row.time_updated,
+            ...parsedData,
+          };
+          const normalized = parseOpenCodeEvent(eventPayload);
+
+          const prevTokens = processedTokens.get(row.id);
+          // Ingest if not seen, or if previous had 0 tokens and now tokens/latency are available
+          if (
+            prevTokens === undefined ||
+            (prevTokens === 0 && normalized.total_tokens > 0) ||
+            (normalized.latency_ms > 0 && prevTokens === 0)
+          ) {
+            processedTokens.set(row.id, normalized.total_tokens);
             await onNewRequest(normalized);
-            console.log(`📥 [OpenCode Live] Captured request ${row.id} (${normalized.model}, ${normalized.total_tokens} tokens, ${normalized.latency_ms}ms)`);
-          } catch (e: any) {
-            console.warn(`Warning parsing opencode message ${row.id}:`, e.message);
+            console.log(
+              `📥 [OpenCode Live] Captured request ${row.id} (${normalized.model}, in: ${normalized.input_tokens}, out: ${normalized.output_tokens}, total: ${normalized.total_tokens}, ${normalized.latency_ms}ms)`
+            );
           }
+        } catch (e: any) {
+          console.warn(`Warning parsing opencode message ${row.id}:`, e.message);
         }
-        if (row.time_created > lastCheckedTime) {
-          lastCheckedTime = row.time_created;
+
+        const maxRowTime = Math.max(row.time_created || 0, row.time_updated || 0);
+        if (maxRowTime > lastCheckedTime) {
+          lastCheckedTime = maxRowTime - 10000; // 10s overlap window for safety
         }
       }
 
