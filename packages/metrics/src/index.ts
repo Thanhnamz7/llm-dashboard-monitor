@@ -5,56 +5,35 @@ export interface KPIMetrics {
   outputTokens: number;
   estimatedCost: number;
   avgLatencyMs: number;
-  p50LatencyMs: number;
   p95LatencyMs: number;
-  p99LatencyMs: number;
   errorRate: number; // percentage (0 - 100)
-  successRequests: number;
-  failedRequests: number;
 }
 
-export interface TimeSeriesPoint {
-  timestamp: string; // ISO string bucket
-  label: string; // Formatted date/time for chart
-  requests: number;
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  estimatedCost: number;
-  avgLatencyMs: number;
-  p95LatencyMs: number;
-  errorRate: number;
-  successCount: number;
-  errorCount: number;
+export interface BudgetConfig {
+  maxCostLimit: number;      // Ví dụ: $10.00
+  maxTokenLimit: number;     // Ví dụ: 1,000,000 tokens
+  warnAtPercentage: number;  // Mặc định 80% (cảnh báo vàng), 100% (cảnh báo đỏ/nguy cấp)
 }
 
-export interface ModelBreakdownItem {
-  model: string;
-  provider: string;
-  requests: number;
-  totalTokens: number;
-  estimatedCost: number;
-  avgLatencyMs: number;
-  errorRate: number;
-}
-
-export interface ErrorBreakdownItem {
-  errorType: string;
-  count: number;
-  percentage: number;
+export interface BudgetAlertStatus {
+  costStatus: 'SAFE' | 'WARNING' | 'CRITICAL';
+  costPercentageUsed: number;
+  tokenStatus: 'SAFE' | 'WARNING' | 'CRITICAL';
+  tokenPercentageUsed: number;
+  alertMessages: string[];
 }
 
 export function calculatePercentile(latencies: number[], percentile: number): number {
   if (latencies.length === 0) return 0;
   const sorted = [...latencies].sort((a, b) => a - b);
   const index = Math.ceil((percentile / 100) * sorted.length) - 1;
-  return sorted[Math.max(0, Math.min(sorted.length - 1, index))];
+  return sorted[Math.max(0, index)];
 }
 
 export function calculateKPIs(records: Array<{
   input_tokens: number;
   output_tokens: number;
-  total_tokens?: number;
+  total_tokens: number;
   latency_ms: number;
   status: string;
   estimated_cost: number;
@@ -68,12 +47,8 @@ export function calculateKPIs(records: Array<{
       outputTokens: 0,
       estimatedCost: 0,
       avgLatencyMs: 0,
-      p50LatencyMs: 0,
       p95LatencyMs: 0,
-      p99LatencyMs: 0,
       errorRate: 0,
-      successRequests: 0,
-      failedRequests: 0,
     };
   }
 
@@ -86,19 +61,12 @@ export function calculateKPIs(records: Array<{
   const latencies: number[] = [];
 
   for (const r of records) {
-    const inp = Number(r.input_tokens) || 0;
-    const out = Number(r.output_tokens) || 0;
-    const tot = Number(r.total_tokens ?? (inp + out)) || 0;
-    const lat = Number(r.latency_ms) || 0;
-    const cost = Number(r.estimated_cost) || 0;
-
-    inputTokens += inp;
-    outputTokens += out;
-    totalTokens += tot;
-    totalLatency += lat;
-    estimatedCost += cost;
-    latencies.push(lat);
-
+    inputTokens += r.input_tokens;
+    outputTokens += r.output_tokens;
+    totalTokens += r.total_tokens;
+    totalLatency += r.latency_ms;
+    estimatedCost += r.estimated_cost;
+    latencies.push(r.latency_ms);
     if (r.status === 'error') {
       failedRequests++;
     }
@@ -111,155 +79,43 @@ export function calculateKPIs(records: Array<{
     outputTokens,
     estimatedCost: Number(estimatedCost.toFixed(4)),
     avgLatencyMs: Math.round(totalLatency / totalRequests),
-    p50LatencyMs: calculatePercentile(latencies, 50),
     p95LatencyMs: calculatePercentile(latencies, 95),
-    p99LatencyMs: calculatePercentile(latencies, 99),
     errorRate: Number(((failedRequests / totalRequests) * 100).toFixed(2)),
-    successRequests: totalRequests - failedRequests,
-    failedRequests,
   };
 }
 
-export function calculateTimeSeries(
-  records: Array<{
-    timestamp: string | Date;
-    input_tokens: number;
-    output_tokens: number;
-    total_tokens?: number;
-    latency_ms: number;
-    status: string;
-    estimated_cost: number;
-  }>,
-  bucketCount: number = 24
-): TimeSeriesPoint[] {
-  if (records.length === 0) return [];
+// Logic kiểm tra và phát cảnh báo ngân sách / hạn mức token
+export function evaluateBudgetAlert(currentCost: number, currentTokens: number, config: BudgetConfig): BudgetAlertStatus {
+  const costPercentageUsed = Number(((currentCost / config.maxCostLimit) * 100).toFixed(1));
+  const tokenPercentageUsed = Number(((currentTokens / config.maxTokenLimit) * 100).toFixed(1));
 
-  // Sort chronologically
-  const sorted = [...records].sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-  );
+  let costStatus: 'SAFE' | 'WARNING' | 'CRITICAL' = 'SAFE';
+  let tokenStatus: 'SAFE' | 'WARNING' | 'CRITICAL' = 'SAFE';
+  const alertMessages: string[] = [];
 
-  const minTime = new Date(sorted[0].timestamp).getTime();
-  const maxTime = new Date(sorted[sorted.length - 1].timestamp).getTime();
-  const span = Math.max(1, maxTime - minTime);
-  const interval = Math.max(60000, Math.ceil(span / bucketCount)); // at least 1 min per bucket
-
-  const buckets: Map<number, typeof records> = new Map();
-
-  for (const r of sorted) {
-    const time = new Date(r.timestamp).getTime();
-    const bucketIndex = Math.min(bucketCount - 1, Math.floor((time - minTime) / interval));
-    const bucketTime = minTime + bucketIndex * interval;
-
-    if (!buckets.has(bucketTime)) {
-      buckets.set(bucketTime, []);
-    }
-    buckets.get(bucketTime)!.push(r);
+  // Đánh giá chi phí (Cost)
+  if (costPercentageUsed >= 100) {
+    costStatus = 'CRITICAL';
+    alertMessages.push(`[NGUY CẤP] Đã VƯỢT HẠN MỨC NGÂN SÁCH! Đã dùng $${currentCost} / $${config.maxCostLimit} (${costPercentageUsed}%). Cần tạm dừng các request không ưu tiên!`);
+  } else if (costPercentageUsed >= config.warnAtPercentage) {
+    costStatus = 'WARNING';
+    alertMessages.push(`[CẢNH BÁO SỚM] Chi phí đã đạt ${costPercentageUsed}% ngân sách ($${currentCost} / $${config.maxCostLimit}). Hãy xem xét tối ưu prompt hoặc đổi model rẻ hơn!`);
   }
 
-  const result: TimeSeriesPoint[] = [];
-
-  for (let i = 0; i < bucketCount; i++) {
-    const bucketTime = minTime + i * interval;
-    const bucketRecords = buckets.get(bucketTime) || [];
-    const date = new Date(bucketTime);
-    const label = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-
-    if (bucketRecords.length === 0) {
-      result.push({
-        timestamp: date.toISOString(),
-        label,
-        requests: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        estimatedCost: 0,
-        avgLatencyMs: 0,
-        p95LatencyMs: 0,
-        errorRate: 0,
-        successCount: 0,
-        errorCount: 0,
-      });
-      continue;
-    }
-
-    const kpis = calculateKPIs(bucketRecords);
-    result.push({
-      timestamp: date.toISOString(),
-      label,
-      requests: kpis.totalRequests,
-      inputTokens: kpis.inputTokens,
-      outputTokens: kpis.outputTokens,
-      totalTokens: kpis.totalTokens,
-      estimatedCost: kpis.estimatedCost,
-      avgLatencyMs: kpis.avgLatencyMs,
-      p95LatencyMs: kpis.p95LatencyMs,
-      errorRate: kpis.errorRate,
-      successCount: kpis.successRequests,
-      errorCount: kpis.failedRequests,
-    });
+  // Đánh giá lượng Token tiêu thụ
+  if (tokenPercentageUsed >= 100) {
+    tokenStatus = 'CRITICAL';
+    alertMessages.push(`[NGUY CẤP] Đã VƯỢT HẠN MỨC TOKEN! Đã dùng ${currentTokens.toLocaleString()} / ${config.maxTokenLimit.toLocaleString()} tokens (${tokenPercentageUsed}%).`);
+  } else if (tokenPercentageUsed >= config.warnAtPercentage) {
+    tokenStatus = 'WARNING';
+    alertMessages.push(`[CẢNH BÁO SỚM] Tiêu thụ Token đạt ${tokenPercentageUsed}% hạn mức cho phép.`);
   }
 
-  return result;
-}
-
-export function calculateModelBreakdown(
-  records: Array<{
-    model: string;
-    provider: string;
-    input_tokens: number;
-    output_tokens: number;
-    total_tokens?: number;
-    latency_ms: number;
-    status: string;
-    estimated_cost: number;
-  }>
-): ModelBreakdownItem[] {
-  const groups: Record<string, typeof records> = {};
-
-  for (const r of records) {
-    const key = `${r.provider}::${r.model}`;
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(r);
-  }
-
-  return Object.entries(groups).map(([key, groupRecords]) => {
-    const [provider, model] = key.split('::');
-    const kpis = calculateKPIs(groupRecords);
-    return {
-      model,
-      provider,
-      requests: kpis.totalRequests,
-      totalTokens: kpis.totalTokens,
-      estimatedCost: kpis.estimatedCost,
-      avgLatencyMs: kpis.avgLatencyMs,
-      errorRate: kpis.errorRate,
-    };
-  }).sort((a, b) => b.requests - a.requests);
-}
-
-export function calculateErrorBreakdown(
-  records: Array<{
-    status: string;
-    error_type?: string | null;
-  }>
-): ErrorBreakdownItem[] {
-  const errorCounts: Record<string, number> = {};
-  let totalErrors = 0;
-
-  for (const r of records) {
-    if (r.status === 'error') {
-      const type = r.error_type || 'Unknown';
-      errorCounts[type] = (errorCounts[type] || 0) + 1;
-      totalErrors++;
-    }
-  }
-
-  if (totalErrors === 0) return [];
-
-  return Object.entries(errorCounts).map(([errorType, count]) => ({
-    errorType,
-    count,
-    percentage: Number(((count / totalErrors) * 100).toFixed(1)),
-  })).sort((a, b) => b.count - a.count);
+  return {
+    costStatus,
+    costPercentageUsed,
+    tokenStatus,
+    tokenPercentageUsed,
+    alertMessages,
+  };
 }
